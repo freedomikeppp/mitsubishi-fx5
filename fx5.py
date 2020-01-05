@@ -1,19 +1,18 @@
 # coding: utf-8
 '''
-三菱電機PLC FX5 SLMPプロトコルにて通信。
+It works by using Mitsubishi PLC FX5 SLMP protocol.
 
-必読マニュアル
- 1.全般 FX5ユーザーズマニュアル(SLMP編)
- 2.エラーコード  FX5ユーザーズマニュアル(Ethernet通信編)
- 3.デバイスコード一覧  FX5ユーザーズマニュアル(MCプロトコル編)
+Recommended manuals
+ 1.全般 in FX5 User's manual(SLMP)
+ 2.エラーコード in FX5 User's manual(Ethernet connection)
+ 3.デバイスコード一覧 in FX5 User's manual(MC protocol)
 '''
 import socket
 import struct
 from threading import RLock
 
 '''
-使い方
-
+Example
     fx5 = FX5.get_connection('192.168.1.10:2555')
     fx5.write('D500', 30)
     print(fx5.read('D500')) # -> 30
@@ -24,7 +23,7 @@ class FX5:
 
     __connections = {}
 
-    #同一ホストの接続は同じインスタンスを使う
+    #If you use same a host, you should use same an instance.
     @classmethod
     def get_connection(cls, host):
         if host not in cls.__connections:
@@ -33,7 +32,7 @@ class FX5:
     
     @classmethod
     def close_all(cls):
-        '''コネクションを全て閉じる'''
+        '''Close all connections'''
         for con_host in cls.__connections:
             con = cls.get_connection(con_host)
             con.close()
@@ -46,7 +45,7 @@ class FX5:
 
     '''
     Args:
-        host: IPアドレス:ポート番号
+        host (str): IP address:Port number
     '''
     def __init__(self, host):
         self.__ip, self.__port = host.split(':')
@@ -55,7 +54,7 @@ class FX5:
         return self.__ip + ":" + self.__port + " " + ("Open" if self.__isopen else "Close")
     
     def __open(self):
-        '''NCに接続します。'''
+        '''Connect to NC'''
         #未接続なら接続
         if not self.__isopen:
             self.__client = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # IPv4,TCP
@@ -64,29 +63,27 @@ class FX5:
             self.__isopen = True
 
     def __send(self, data):
-        '''PLCにTCPソケット通信で命令伝文を送る。
+        '''Send instruction words to PLC on TCP socket connection.
 
-        エラーの場合は　C05C　など16進数でエラーコードをThrowします。
-        エラーコードは FX5ユーザーズマニュアル(Ethernet通信編)を参照の事。
+        When some errors occur, it will throw error codes with hexadecimal.
 
         Args:
-            data (list): 伝文
+            data (list): data sentence
         
         Return:
-            list: 応答データを配列で返す (exp: [10, 20, ....])
+            list: responsed data with array (exp: [10, 20, ....])
         '''
         with self.__lock:
             try:
                 self.__open()
                 self.__client.sendall(data)
-                result = self.__client.recv(128) # 今回の通信なら20でも十分
+                result = self.__client.recv(128)
 
-                # 通信Errorチェック
+                # check errors
                 if len(result) < 11:
-                    # 応答伝文長さは11byte以上になるので、満たない場合は通信エラー
-                    # FX5は同じポートに同時接続は1機器だけなので、他がつないでいると応答を返さない
-                    # 以降読み書きできないのでいったん閉じておく
-                    raise Exception('通信エラー、他端末と通信中の可能性' + str(len(result)))
+                    # Length of responsed data is required over 11 bytes
+                    # Note: One port uses only one device in FX5.
+                    raise Exception('Connection error. It already may connect other device.' + str(len(result)))
             except Exception as e:
                 self.close()
                 raise e
@@ -95,16 +92,16 @@ class FX5:
             # 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19
             # D0-00-00-FF-FF-03-00-03-00-00-00-10-00-00-00-00-00-00-00-00
             if format(result[9], '#04x') != '0x00' and format(result[10], '#04x') != '0x00':
-                # 連続2バイト(2バイト目は8bit左シフト)を積算し、16ビット符号なし整数
+                # Sum 2 bytes(the second byte must be 8-bit shift) to get unsigned 16-bit integer
                 res_u16bit = self.to_int16_unsigned(result[10], result[9])
                 if res_u16bit in self.__error:
                     errmsg = self.__error[res_u16bit]
                 else:
-                    errmsg = "不明なエラーです"
+                    errmsg = "unknown error"
                 raise Exception('Error code: ' + str(res_u16bit) + " " + errmsg)
 
-            # エラーがなければ応答データ部分だけ返す
-            length = self.to_int16_signed(result[8], result[7]) - 2 # 応答データ長計算 終了コードの2バイトは除く
+            # If there are no erros, it returns responsed data
+            length = self.to_int16_signed(result[8], result[7]) - 2 # exclude end code(2byte)
             re = []
             for i in range(length):
                 re.append(result[11 + i])
@@ -118,10 +115,10 @@ class FX5:
             pass
 
     def is_open(self):
-        '''__open()処理後、接続が開いているか確認する。
+        '''After calling '__open()' method, you can check if connection is open.
         
         Return:
-            bool: 接続が開いているならTrue
+            bool: True of False
         '''
         with self.__lock:
             try:
@@ -131,17 +128,17 @@ class FX5:
             return self.__isopen
 
     def exec_cmd(self, cmd):
-        '''指定されたデバイスと値の文字列を実行する。
+        '''Exceute commands with values.
 
-        文字列は必ず下記のルールに従う。
-        ・デバイス名と値は、'='で繋ぐ。
-        ・デバイスごとに、','で区切る。
+        You must use below rules.
+        ・Put string '=' between device name and value.
+        ・Put string ',' to separate devices.
 
         exp)
         D150=31,D200=5,D300=2,D160=1,D210=1,D310=1,M1501=1
 
         Args:
-            cmd (str): デバイスと値の文字列
+            cmd (str): device names and values
         '''
         for dev_value in cmd.split(','):
             dev, value = dev_value.split('=')
@@ -154,7 +151,7 @@ class FX5:
             return self.__read_m(dev_no)
         elif dev_type == 'D':
             return self.__read_d(dev_no, as_ascii)
-        raise Exception("未対応デバイスタイプです")
+        raise Exception("Unsupported device type")
     
     def write(self, devno, value, as_ascii=False):
         dev_type = devno[0]
@@ -163,89 +160,89 @@ class FX5:
             return self.__write_m(dev_no, int(value))
         elif dev_type == 'D':
             return self.__write_d(dev_no, value, as_ascii)
-        raise Exception("未対応デバイスタイプです")
+        raise Exception("Unsupported device type")
 
     def __read_m(self, devno):
-        '''デバイス M ビット読み込み。
+        '''Read device 'M'
 
         Args:
-            devno (int): デバイス番号
+            devno (int): device number
         
         Return:
-            bool: ビット（1=True, 0=False） から真偽値を返す。
+            bool: return boolean from a bit(1=True, 0=False).
         '''
         msg = [
-            0x50, 0x00, # サブヘッダ（FX5U固定）
-            0x00, # 要求先ネットワーク番号（FX5U固定）
-            0xFF, # 要求先局番（FX5U固定）
-            0xFF, 0x03, # 要求先ユニットI/O番号（FX5U固定）
-            0x00, # 要求先マルチドロップ局番（FX5U固定）
-            0x0C, 0x00, # 要求データ長(リザーブ以降のバイト長)
-            0x00, 0x00, # リザーブ
-            0x01, 0x04, # 一括読み込み
-            0x01, 0x00, # サブコマンド（ビット単位）
-            devno & 0xff, # 先頭デバイス番号（intを下位バイトから渡す）
+            0x50, 0x00, # sub header（fixed FX5U）
+            0x00, # required network number（fixed FX5U）
+            0xFF, # required area code（fixed FX5U）
+            0xFF, 0x03, # required unit I/O number（fixed FX5U）
+            0x00, # required multi drop area code（fixed FX5U）
+            0x0C, 0x00, # required data length (byte size after reserved code)
+            0x00, 0x00, # reserved code
+            0x01, 0x04, # read command with bulk
+            0x01, 0x00, # sub command（bit unit）
+            devno & 0xff, # first device number（from lower byte）
             devno>>8 & 0xff,
             devno>>16 & 0xff,
-            0x90, # デバイスコード 90=M
-            0x01, 0x00 # デバイス点数（1固定とする）
+            0x90, # device code 90=M
+            0x01, 0x00 # device point（fixed 1）
         ]
         pack_msg = struct.pack('21B', *msg)
         re = self.__send(pack_msg)
         return format(re[0], '#04x') == '0x10'
 
     def __write_m(self, devno, on):
-        '''デバイス M ビット書き込み。
+        '''Write device 'M'.
 
         Args:
-            devno (int): デバイス番号
-            on (bool): ビット（1=True, 0=False） 
+            devno (int): device number
+            on (bool): return boolean from a bit(1=True, 0=False).
         '''
         msg = [
-            0x50, 0x00, # サブヘッダ（FX5U固定）
-            0x00, # 要求先ネットワーク番号（FX5U固定）
-            0xFF, # 要求先局番（FX5U固定）
-            0xFF, 0x03, # 要求先ユニットI/O番号（FX5U固定）
-            0x00, # 要求先マルチドロップ局番（FX5U固定）
-            0x0D, 0x00, # 要求データ長(リザーブ以降のバイト長)
-            0x00, 0x00, # リザーブ
-            0x01, 0x14, # 一括書き込みコマンド
-            0x01, 0x00, # サブコマンド（ビット単位）
-            devno & 0xff, # 先頭デバイス番号（intを下位バイトから渡す）
+            0x50, 0x00,
+            0x00,
+            0xFF,
+            0xFF, 0x03,
+            0x00,
+            0x0D, 0x00,
+            0x00, 0x00,
+            0x01, 0x14, # write command with bulk
+            0x01, 0x00,
+            devno & 0xff,
             devno>>8 & 0xff,
-            devno>>16 & 0xff,0x90, # デバイスコード 90=M
-            0x01, 0x00, # デバイス点数（1固定とする）
-            0x10 if on == True else 0x00 # 点数分の書き込みデータ（1バイトで渡すので）
+            devno>>16 & 0xff,0x90, # device code 90=M
+            0x01, 0x00,
+            0x10 if on == True else 0x00 # write data
         ]
         pack_msg = struct.pack('22B', *msg)
         self.__send(pack_msg)
         return
 
     def __read_d(self, devno, as_ascii=False):
-        '''デバイス D からワード読み込み。
+        '''Read device 'D'
 
         Args:
-            devno (int): デバイス番号
-            as_ascii (bool): Dデバイスの値がASCIIで格納されている場合に指定する。
+            devno (int): device number
+            as_ascii (bool): you can use this argument when value is ASCII code.
         
         Return:
-            int or str: as_ascii指定なら文字列、指定無しなら数値を返す。
+            int or str: If you use as_ascii, it returns string.
         '''
         msg = [
-            0x50, 0x00, # サブヘッダ（FX5U固定）
-            0x00, # 要求先ネットワーク番号（FX5U固定）
-            0xFF, # 要求先局番（FX5U固定）
-            0xFF, 0x03, # 要求先ユニットI/O番号（FX5U固定）
-            0x00, # 要求先マルチドロップ局番（FX5U固定）
-            0x0C, 0x00, # 要求データ長(リザーブ以降のバイト長)
-            0x00, 0x00, # リザーブ
-            0x01, 0x04, # 一括読み込み
-            0x00, 0x00, # サブコマンド（ワード単位）
-            devno & 0xff, # 先頭デバイス番号（intを下位バイトから渡す）
+            0x50, 0x00,
+            0x00,
+            0xFF,
+            0xFF, 0x03,
+            0x00,
+            0x0C, 0x00,
+            0x00, 0x00,
+            0x01, 0x04,
+            0x00, 0x00,
+            devno & 0xff,
             devno>>8 & 0xff,
             devno>>16 & 0xff,
-            0xA8, # デバイスコード A8=D
-            0x01, 0x00 # デバイス点数（1固定とする）
+            0xA8, # device code A8=D
+            0x01, 0x00
         ]
         pack_msg = struct.pack('21B', *msg)
         re = self.__send(pack_msg)
@@ -255,34 +252,34 @@ class FX5:
             return self.to_int16_signed(re[1], re[0])
 
     def __write_d(self, devno, data, as_ascii=False):
-        '''デバイス D ビット書き込み。
+        '''Write device 'D'.
 
         Args:
-            devno (int): デバイス番号
-            data (int or str): 書き込む値
-            as_ascii (bool): Dデバイスの値がASCIIで格納されている場合に指定する。
+            devno (int): device number
+            data (int or str): value
+            as_ascii (bool): you can use this argument when value is ASCII code.
         '''
         if as_ascii:
             if len(data) > 2:
-                raise Exception("DデバイスにASCIIで書き込める文字列は、2文字までです。")
-            tuple_data = self.to_ascii(str(data)) # (low, high)に変換
+                raise Exception("you can write only 2 words")
+            tuple_data = self.to_ascii(str(data)) # convert to (low, high)
         else:
-            tuple_data = self.to_2bite_signed(int(data)) # (low, high)に変換
+            tuple_data = self.to_2bite_signed(int(data)) # convert to (low, high)
         msg = [
-            0x50, 0x00, # サブヘッダ（FX5U固定）
-            0x00, # 要求先ネットワーク番号（FX5U固定）
-            0xFF, # 要求先局番（FX5U固定）
-            0xFF, 0x03, # 要求先ユニットI/O番号（FX5U固定）
-            0x00, # 要求先マルチドロップ局番（FX5U固定）
-            0x0E, 0x00, # 要求データ長(リザーブ以降のバイト長)
-            0x00, 0x00, # リザーブ
-            0x01, 0x14, # 一括書き込み
-            0x00, 0x00, # サブコマンド（ワード単位）
-            devno & 0xff, # 先頭デバイス番号（intを下位バイトから渡す）
+            0x50, 0x00,
+            0x00,
+            0xFF,
+            0xFF, 0x03,
+            0x00,
+            0x0E, 0x00,
+            0x00, 0x00,
+            0x01, 0x14,
+            0x00, 0x00,
+            devno & 0xff,
             devno>>8 & 0xff,
             devno>>16 & 0xff,
-            0xA8, # デバイスコード A8=D
-            0x01, 0x00, # デバイス点数（1固定とする）
+            0xA8, # device code A8=D
+            0x01, 0x00,
             tuple_data[0], tuple_data[1] # low, high
         ]
         pack_msg = struct.pack('23B', *msg)
@@ -290,84 +287,63 @@ class FX5:
         return
     
     def to_int16_signed(self, upper, lower):
-        '''連続2バイトの8ビット16進数を、16ビット符号付きに変換する。
-
-        主に、三菱シーケンサFX5の応答データを変換する際に使用する。
-        上位8ビットを左シフトして、下位8ビットと足し合わせたのち、符号付き変換の処理をする。
+        '''convert 2-byte(8bit/hex) to unsigned 16-bit
         
         Args:
-            upper (int): 上位バイト
-            lower (int): 下位バイト
+            upper (int): upper byte
+            lower (int): lower byte
         
         Return:
-            int：16ビット符号付き
+            int：signed 16-bit
         '''
         num = (upper<<8) + lower
         return -(num & 0b1000000000000000) | (num & 0b0111111111111111)
 
     def to_int16_unsigned(self, upper, lower):
-        '''連続2バイトの8ビット16進数を、16ビット符号無しに変換する。
-
-        主に、三菱シーケンサFX5の応答データのエラーコード変換する際に使用する。
-        上位8ビットを左シフトして、下位8ビットと足し合わせた、符号無し変換の処理をする。
+        '''convert 2-byte(8bit 16hex) to unsigned 16-bit
         
         Args:
-            upper (int): 上位バイト
-            lower (int): 下位バイト
+            upper (int): upper byte
+            lower (int): lower byte
         
         Return:
-            int：16ビット符号付き
+            int：signed 16-bit
         '''
         return (upper<<8) + lower
 
     def to_string(self, upper, lower):
-        '''連続2バイトの8ビット16進数を、ASCIIコードとして解釈し、2つの文字列に変換する。
-
-        主に、三菱シーケンサFX5の応答データを変換する際に使用する。
-        Dデバイスに格納された、2文字のASCIIコードを、文字列に変換する。
+        '''convert 2-byte(8bit/hex) to two strings
         
         Args:
-            upper (int): 上位バイト
-            lower (int): 下位バイト
+            upper (int): upper byte
+            lower (int): lower byte
         
         Return:
-            string：2つの文字列
+            string：two strings
         '''
-        # upperまたはlowerが0の場合は、ASCIIコードではnullのため空文字にする
         return (chr(upper) if upper != 0 else '') + (chr(lower) if lower != 0 else '')
     
     def to_2bite_signed(self, num):
-        '''整数を、符号付き2バイト（tuple）に変換する。
-
-        三菱シーケンサFX5のデバイスD書き込み時に使用する。
-        シーケンサへは、送りたい整数データを符号付き2バイトに
-        変換して送る必要がある。
-
-        変換に使用する、structモジュールについては公式ドキュメント参照。
-        https://docs.python.jp/3/library/struct.html
+        '''convert integer to signed 2-byte
 
         Args:
-            num (int): 変換対象の整数。
+            num (int): target number
         
         Return:
-            tuple(int,int)：符号付き2バイト（low, high)
+            tuple(int,int)：signed 2-byte（low, high)
         '''
         import struct
-        pack = struct.pack('H', num) # H = unsigned short/整数/size:2
-        return struct.unpack('BB', pack) # B = unsigned char/整数/size:1
+        pack = struct.pack('H', num) # H = unsigned short/integer/size:2
+        return struct.unpack('BB', pack) # B = unsigned char/integer/size:1
 
     def to_ascii(self, str_data):
-        '''文字列(0文字以上, 2文字以下)を、ASCIIコードとして解釈し、数値（tuple）に変換する。
+        '''convert strings(from 0 length to 2 length) to integer（tuple）.
 
-        三菱シーケンサFX5のデバイスD書き込み時に使用する。
-        シーケンサへは、送りたい整数データを符号付き2バイトに
-        変換して送る必要がある。
-        
         Args:
-            str_data (str): 変換対象の文字列（0文字以上, 2文字以下）
+            str_data (str): strings
 
         Return:
-            tuple(int,int)：数値、但し順番は（lower, upper)
+            tuple(int,int)：integer (lower, upper)
         '''
         if len(str_data) == 2:
             lower = ord(str_data[0])
@@ -380,77 +356,79 @@ class FX5:
             upper = 0
         return (lower, upper)
 
-    #FX5マニュアルよりのエラーコード表（16ビット符号なし整数）
+    # quote FX5 manual in Mitsubishi site
+    # (I translated into English by using Google translation
+    #  So don't ask me detailed meaning of errors..., sorry.)
     __error = {
-        0x1920 : 'IPアドレス設定など（SD8492～SD8497）の値が設定範囲外です。',
-        0x1921 : '書込み要求とクリア要求（SM8492、SM8495）が同時にOFF→ONされました。',
-        0x112E : 'オープン処理で、コネクションが確立されませんでした。',
-        0x1134 : 'TCP/IPの交信で、TCP ULPタイムアウトエラーが発生（相手機器からACKが返されない）しました。',
-        0x2160 : 'IPアドレスの重複を検出しました。',
-        0x2250 : 'CPUユニットに格納されているプロトコル設定データが、使用できるユニットではありません。',
-        0xC012 : '相手機器とのオープン処理に失敗しました。（TCP/IPの場合）',
-        0xC013 : '相手機器とのオープン処理に失敗しました。（UDP/IPの場合）',
-        0xC015 : 'オープン処理時の、相手機器のIPアドレスの設定値に誤り、または、 専用命令の相手機器IPアドレスの設定に誤りがあります。',
-        0xC018 : '相手機器IPアドレスの設定に誤りがあります。',
-        0xC020 : '送受信データ長が許容範囲を超えています。',
-        0xC024 : '交信手段が通信プロトコル以外のコネクションにて、通信プロトコルによる交信を実施しました。',
-        0xC025 : 'コントロールデータの内容に誤りがある、または、オープン設定パラメータが未設定なのに、オープン設定パラメータでのオープンを指定されました。',
-        0xC027 : 'ソケット通信の伝文送信に失敗しました。',
-        0xC029 : 'コントロールデータの内容に誤り、または、 オープン設定パラメータが未設定でオープン指定されました。',
-        0xC035 : 'レスポンス監視タイマ値以内に、相手機器の生存確認ができませんでした。',
-        0xC0B6 : '専用命令で指定されたチャンネルが範囲外です。',
-        0xC0DE : 'ソケット通信の伝文受信に失敗しました。',
-        0xC1A2 : '要求に対する応答を受信できませんでした。',
-        0xC1AC : '再送回数の指定に誤りがあります。',
-        0xC1AD : 'データ長の指定に誤りがあります。',
-        0xC1AF : 'ポート番号の指定に誤りがあります。',
-        0xC1B0 : '指定されたコネクションは既にオープン処理が完了してます。',
-        0xC1B1 : '指定されたコネクションはオープン処理が完了してません。',
-        0xC1B3 : '指定されたチャンネルは他の送受信命令が実行中です。',
-        0xC1B4 : '到達時間の指定に誤りがあります。',
-        0xC1BA : 'イニシャル未完了状態で専用命令が実行されました。',
-        0xC1C6 : '専用命令の実行・異常時完了タイプの設定に誤りがあります。',
-        0xC1CC : 'SLMPSNDで許容範囲を超えるデータ長の応答を受信、または、要求データの指定に誤りがあります。',
-        0xC1CD : 'SLMPSND命令の伝文送信に失敗しました。',
-        0xC1D0 : '専用命令の要求先ユニットI/O番号に誤りがあります。',
-        0xC1D3 : 'コネクションの交信手段に対応していない専用命令が実行されました。',
-        0xC400 : '通信プロトコル準備未完了時（SD10692=0）にSP.ECPRTCL命令を実行しました。',
-        0xC401 : 'CPUユニットに登録されていないプロトコル番号を、SP.ECPRTCL命令のコントロールデータで指定し、または、プロトコル設定データを書き込んでいない状態でSP.ECPRTCL命令を実行しました。',
-        0xC404 : 'プロトコル実行中にキャンセル要求を受け付けて、SP.ECPRTCL命令を異常完了しました。',
-        0xC405 : 'SP.ECPRTCL命令のコントロールデータにおいて、プロトコル番号の設定値が範囲外です。',
-        0xC410 : '受信待ち時間がタイムアップしました。',
-        0xC411 : '受信したデータが2046バイトを超えました。',
-        0xC417 : '受信したデータのデータ長、またはデータ数が範囲外です。',
-        0xC431 : 'SP.ECPRTCL命令実行中にコネクションクローズ発生しました。',
-        0xCEE0 : '接続機器の自動検出中に、他の周辺機器から検出、または他のiQSS機能を実行しました。',
-        0xCEE1 : '異常なフレームを受信しました。',
-        0xCEE2 : '異常なフレームを受信しました。',
-        0xCF10 : '異常なフレームを受信しました。',
-        0xCF20 : '通信設定の設定値が範囲外、または、対象機器に設定できない通信設定項目を設定、または、対象機器で設定必須の項目が未設定です。',
-        0xCF30 : '対象機器がサポートしていないパラメータを指定しました。',
-        0xCF31 : '異常なフレームを受信しました。',
-        0xCF70 : 'Ethernetの通信経路で異常が発生しました。',
-        0xCF71 : 'タイムアウトエラーが発生しました。',
-        0xC050 : '交信データコードがASCIIに設定されている場合に、バイナリ変換できないASCIIコードのデータを受信しました。',
-        0xC051 : '一度に一括読み書きできる最大ビットデバイス数が許容範囲外である。',
-        0xC052 : '一度に一括読み書きできる最大ワードデバイス数が許容範囲外である。',
-        0xC053 : '一度にランダム読み書きできる最大ビットデバイス数が許容範囲外である。',
-        0xC054 : '一度にランダム読み書きできる最大ワードデバイス数が許容範囲外である。',
-        0xC056 : '最大アドレスを超える書込みおよび読出し要求である。',
-        0xC058 : 'ASCII－バイナリ変換後の要求データ長が、キャラクタ部（テキストの一部）のデータ数と合わない。',
-        0xC059 : 'コマンド、サブコマンドの指定に誤りがある。CPUユニットでは使用不可のコマンド、サブコマンドである。',
-        0xC05B : '指定デバイスに対してCPUユニットが書込みおよび読出しできない。',
-        0xC05C : '要求内容に誤りがある。（ワードデバイスに対するビット単位の書込みおよび読出しなど）',
-        0xC05F : '対象CPUユニットに対して実行できない要求である',
-        0xC060 : '要求内容に誤りがある。（ビットデバイスに対するデータの指定に誤りがあるなど）',
-        0xC061 : '要求データ長が、キャラクタ部（テキストの一部）のデータ数と合わない。',
-        0xC06F : '交信データコードが”バイナリ”に設定されている場合に、ASCIIの要求伝文を受信した。（本エラーコードは、エラー履歴のみ登録され異常応答は返りません）',
-        0xC0D8 : '指定したブロック数が範囲を超えています',
-        0xC200 : 'リモートパスワードに誤りがある',
-        0xC201 : '交信に使ったポートがリモートパスワードのロック状態である',
-        0xC204 : 'リモートパスワードのアンロック処理を要求した相手機器と異なる。',
-        0xC810 : 'リモートパスワードに誤りがある。（認証失敗回数9回以下）',
-        0xC815 : 'リモートパスワードに誤りがある。（認証失敗回数10回）',
-        0xC816 : 'リモートパスワード認証ロックアウト中である。'
-        #0x4000H～4FFF : 'CPUユニットが検出したエラー。（SLMPによる通信機能以外で発生したエラー）',
+        0x1920: 'The value of the IP address setting (SD8492 to SD8497) is out of the setting range. ',
+        0x1921: 'The write request and the clear request (SM8492, SM8495) were turned off and on at the same time. ',
+        0x112E: 'Connection not established during open processing. ',
+        0x1134: 'A TCP ULP timeout error occurred during TCP / IP communication (ACK was not returned from the partner device). ',
+        0x2160: 'A duplicate IP address has been detected. ',
+        0x2250: 'The protocol setting data stored in the CPU unit is not a usable unit. ',
+        0xC012: 'Open processing with the partner device failed. (For TCP / IP) ',
+        0xC013: 'The open processing with the partner device failed. (For UDP / IP) ',
+        0xC015: 'There is an error in the setting value of the IP address of the external device during open processing, or the setting of the IP address of the external device in the dedicated command. ',
+        0xC018: 'The setting of the IP address of the partner device is incorrect. ',
+        0xC020: 'The transmission / reception data length exceeds the allowable range. ',
+        0xC024: 'Communication using communication protocol was performed in connection other than communication protocol. ',
+        0xC025: 'The content of the control data is incorrect or the open setting parameter has not been set, but the open setting parameter was specified. ',
+        0xC027: 'Message transmission of socket communication failed. ',
+        0xC029: 'The content of the control data is incorrect, or the open setting parameter was specified as open without setting. ',
+        0xC035: 'The existence of the partner device could not be confirmed within the response monitoring timer value. ',
+        0xC0B6: 'The channel specified by the dedicated instruction is out of range. ',
+        0xC0DE: 'Failed to receive message for socket communication. ',
+        0xC1A2: 'Response to request could not be received. ',
+        0xC1AC: 'The number of retransmissions is incorrect. ',
+        0xC1AD: 'The data length is incorrectly specified. ',
+        0xC1AF: 'The port number is incorrectly specified. ',
+        0xC1B0: 'The specified connection has already been opened. ',
+        0xC1B1: 'The specified connection has not completed open processing. ',
+        0xC1B3: 'Another transmission / reception command is being executed on the specified channel. ',
+        0xC1B4: 'The arrival time specification is incorrect. ',
+        0xC1BA: 'The dedicated instruction was executed in the initial uncompleted state. ',
+        0xC1C6: 'There is an error in the setting of the execution type of the dedicated instruction and the completion type when an error occurs. ',
+        0xC1CC: 'Response with a data length exceeding the allowable range in SLMPSND was received, or the request data was specified incorrectly. ',
+        0xC1CD: 'Failed to send message of SLMPSND command. ',
+        0xC1D0: 'The request destination module I / O number of the dedicated instruction is incorrect. ',
+        0xC1D3: 'A dedicated command not supported by the connection communication method was executed. ',
+        0xC400: 'The SP.ECPRTCL instruction was executed when communication protocol preparation was not completed (SD10692 = 0). ',
+        0xC401: 'Specified a protocol number that is not registered in the CPU unit with the control data of the SP.ECPRTCL instruction, or executed the SP.ECPRTCL instruction without writing the protocol setting data. ',
+        0xC404: 'The SP.ECPRTCL instruction was abnormally completed while accepting a cancel request during protocol execution. ',
+        0xC405: 'In the control data of the SP.ECPRTCL instruction, the set value of the protocol number is out of range. ',
+        0xC410: 'Reception waiting time has timed out. ',
+        0xC411: 'The received data has exceeded 2046 bytes. ',
+        0xC417: 'The data length of received data or the number of data is out of range. ',
+        0xC431: 'Connection closed during execution of the SP.ECPRTCL instruction. ',
+        0xCEE0: 'Detected from another peripheral device or executed another iQSS function during automatic detection of connected device. ',
+        0xCEE1: 'An abnormal frame was received. ',
+        0xCEE2: 'An abnormal frame was received. ',
+        0xCF10: 'An abnormal frame was received. ',
+        0xCF20: 'The communication setting value is out of range, or a communication setting item that cannot be set for the target device has been set, or an item that must be set for the target device has not been set. ',
+        0xCF30: 'Parameter not supported by target device was specified. ',
+        0xCF31: 'An abnormal frame was received. ',
+        0xCF70: 'An error has occurred in the Ethernet communication path. ',
+        0xCF71: 'A timeout error has occurred. ',
+        0xC050: 'When communication data code is set to ASCII, ASCII code data that cannot be converted to binary was received. ',
+        0xC051: 'The maximum number of bit devices that can be read / written at once at one time is out of the allowable range. ',
+        0xC052: 'The maximum number of word devices that can be read / written at once at one time is out of the allowable range. ',
+        0xC053: 'The maximum number of bit devices that can be randomly read and written at one time is out of the allowable range. ',
+        0xC054: 'The maximum number of word devices that can be read / written at random at one time is out of the allowable range. ',
+        0xC056: 'Write and read request exceeding the maximum address. ',
+        0xC058: 'The required data length after ASCII-binary conversion does not match the number of data in the character part (part of text). ',
+        0xC059: 'The command or subcommand specification is incorrect. Commands and subcommands that cannot be used in the CPU unit. ',
+        0xC05B: 'The CPU unit cannot write to or read from the specified device. ',
+        0xC05C: 'The request content is incorrect. (Such as bit-wise writing and reading for word devices) ',
+        0xC05F: 'The request cannot be executed for the target CPU module',
+        0xC060: 'The request content is incorrect. (Such as an incorrect data specification for a bit device) ',
+        0xC061: 'The requested data length does not match the number of data in the character part (part of text). ',
+        0xC06F: 'ASCII request message was received when the communication data code was set to "binary." (For this error code, only the error history is registered and no abnormal response is returned.) ',
+        0xC0D8: 'The specified number of blocks is out of range',
+        0xC200: 'The remote password is incorrect',
+        0xC201: 'The port used for communication is locked with the remote password',
+        0xC204: 'Different from the partner device that requested unlock processing of the remote password. ',
+        0xC810: 'The remote password is incorrect. (Authentication failed 9 times or less) ',
+        0xC815: 'The remote password is incorrect. (Authentication failed 10 times) ',
+        0xC816: 'Remote password authentication lockout in progress. '
+        #0x4000H～4FFF : 'CPU unit finds errors.（exclude connection SLMP'
         }
